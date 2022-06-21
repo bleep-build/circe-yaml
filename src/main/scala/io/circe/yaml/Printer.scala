@@ -1,13 +1,14 @@
 package io.circe.yaml
 
-import Printer._
 import io.circe._
+import io.circe.yaml.Printer._
+import org.snakeyaml.engine.v2.api.{DumpSettings, StreamDataWriter}
+import org.snakeyaml.engine.v2.common
+import org.snakeyaml.engine.v2.emitter.Emitter
+import org.snakeyaml.engine.v2.nodes._
+import org.snakeyaml.engine.v2.serializer.Serializer
+
 import java.io.StringWriter
-import org.yaml.snakeyaml.DumperOptions
-import org.yaml.snakeyaml.emitter.Emitter
-import org.yaml.snakeyaml.nodes._
-import org.yaml.snakeyaml.resolver.Resolver
-import org.yaml.snakeyaml.serializer.Serializer
 import scala.collection.JavaConverters._
 
 final case class Printer(
@@ -23,57 +24,52 @@ final case class Printer(
   stringStyle: StringStyle = StringStyle.Plain,
   lineBreak: LineBreak = LineBreak.Unix,
   explicitStart: Boolean = false,
-  explicitEnd: Boolean = false,
-  version: YamlVersion = YamlVersion.Auto
+  explicitEnd: Boolean = false
 ) {
 
   def pretty(json: Json): String = {
-    val rootTag = yamlTag(json)
-    val writer = new StringWriter()
-    val serializer = new Serializer(new Emitter(writer, options), new Resolver, options, rootTag)
+    val writer = new StreamToStringWriter
+    val serializer = new Serializer(options, new Emitter(options, writer))
     serializer.open()
     serializer.serialize(jsonToYaml(json))
     serializer.close()
     writer.toString
   }
 
-  private lazy val options = {
-    val options = new DumperOptions()
-    options.setIndent(indent)
-    options.setWidth(maxScalarWidth)
-    options.setSplitLines(splitLines)
-    options.setIndicatorIndent(indicatorIndent)
-    options.setTags(tags.asJava)
-    options.setDefaultScalarStyle(StringStyle.toScalarStyle(stringStyle))
-    options.setLineBreak(lineBreak match {
-      case LineBreak.Unix    => DumperOptions.LineBreak.UNIX
-      case LineBreak.Windows => DumperOptions.LineBreak.WIN
-      case LineBreak.Mac     => DumperOptions.LineBreak.MAC
-    })
-    options.setVersion(version match {
-      case YamlVersion.Auto    => null
-      case YamlVersion.Yaml1_0 => DumperOptions.Version.V1_0
-      case YamlVersion.Yaml1_1 => DumperOptions.Version.V1_1
-    })
-    options.setExplicitStart(explicitStart)
-    options.setExplicitEnd(explicitEnd)
-    options
-  }
+  private lazy val options =
+    DumpSettings
+      .builder()
+      .setIndent(indent)
+      .setWidth(maxScalarWidth)
+      .setSplitLines(splitLines)
+      .setIndicatorIndent(indicatorIndent)
+      .setTagDirective(tags.asJava)
+      .setDefaultScalarStyle(StringStyle.toScalarStyle(stringStyle))
+      .setExplicitStart(explicitStart)
+      .setExplicitEnd(explicitEnd)
+      .setBestLineBreak {
+        lineBreak match {
+          case LineBreak.Unix    => "\n"
+          case LineBreak.Windows => "\r\n"
+          case LineBreak.Mac     => "\r"
+        }
+      }
+      .build()
 
   private def isBad(s: String): Boolean = s.indexOf('\u0085') >= 0 || s.indexOf('\ufeff') >= 0
   private def hasNewline(s: String): Boolean = s.indexOf('\n') >= 0
 
-  private def scalarStyle(value: String): DumperOptions.ScalarStyle =
-    if (isBad(value)) DumperOptions.ScalarStyle.DOUBLE_QUOTED else DumperOptions.ScalarStyle.PLAIN
+  private def scalarStyle(value: String): common.ScalarStyle =
+    if (isBad(value)) common.ScalarStyle.DOUBLE_QUOTED else common.ScalarStyle.PLAIN
 
-  private def stringScalarStyle(value: String): DumperOptions.ScalarStyle =
-    if (isBad(value)) DumperOptions.ScalarStyle.DOUBLE_QUOTED
-    else if (stringStyle == StringStyle.Plain && hasNewline(value)) DumperOptions.ScalarStyle.LITERAL
+  private def stringScalarStyle(value: String): common.ScalarStyle =
+    if (isBad(value)) common.ScalarStyle.DOUBLE_QUOTED
+    else if (stringStyle == StringStyle.Plain && hasNewline(value)) common.ScalarStyle.LITERAL
     else StringStyle.toScalarStyle(stringStyle)
 
-  private def scalarNode(tag: Tag, value: String) = new ScalarNode(tag, value, null, null, scalarStyle(value))
-  private def stringNode(value: String) = new ScalarNode(Tag.STR, value, null, null, stringScalarStyle(value))
-  private def keyNode(value: String) = new ScalarNode(Tag.STR, value, null, null, scalarStyle(value))
+  private def scalarNode(tag: Tag, value: String) = new ScalarNode(tag, value, scalarStyle(value))
+  private def stringNode(value: String) = new ScalarNode(Tag.STR, value, stringScalarStyle(value))
+  private def keyNode(value: String) = new ScalarNode(Tag.STR, value, scalarStyle(value))
 
   private def jsonToYaml(json: Json): Node = {
 
@@ -88,7 +84,7 @@ final case class Printer(
       new MappingNode(
         Tag.MAP,
         childNodes.toList.asJava,
-        if (mappingStyle == FlowStyle.Flow) DumperOptions.FlowStyle.FLOW else DumperOptions.FlowStyle.BLOCK
+        if (mappingStyle == FlowStyle.Flow) common.FlowStyle.FLOW else common.FlowStyle.BLOCK
       )
     }
 
@@ -101,7 +97,7 @@ final case class Printer(
         new SequenceNode(
           Tag.SEQ,
           arr.map(jsonToYaml).asJava,
-          if (sequenceStyle == FlowStyle.Flow) DumperOptions.FlowStyle.FLOW else DumperOptions.FlowStyle.BLOCK
+          if (sequenceStyle == FlowStyle.Flow) common.FlowStyle.FLOW else common.FlowStyle.BLOCK
         ),
       obj => convertObject(obj)
     )
@@ -109,6 +105,9 @@ final case class Printer(
 }
 
 object Printer {
+  class StreamToStringWriter extends StringWriter with StreamDataWriter {
+    override def flush(): Unit = super.flush()
+  }
 
   val spaces2 = Printer()
   val spaces4 = Printer(indent = 4)
@@ -127,12 +126,12 @@ object Printer {
     case object Literal extends StringStyle
     case object Folded extends StringStyle
 
-    def toScalarStyle(style: StringStyle): DumperOptions.ScalarStyle = style match {
-      case StringStyle.Plain        => DumperOptions.ScalarStyle.PLAIN
-      case StringStyle.DoubleQuoted => DumperOptions.ScalarStyle.DOUBLE_QUOTED
-      case StringStyle.SingleQuoted => DumperOptions.ScalarStyle.SINGLE_QUOTED
-      case StringStyle.Literal      => DumperOptions.ScalarStyle.LITERAL
-      case StringStyle.Folded       => DumperOptions.ScalarStyle.FOLDED
+    def toScalarStyle(style: StringStyle): common.ScalarStyle = style match {
+      case StringStyle.Plain        => common.ScalarStyle.PLAIN
+      case StringStyle.DoubleQuoted => common.ScalarStyle.DOUBLE_QUOTED
+      case StringStyle.SingleQuoted => common.ScalarStyle.SINGLE_QUOTED
+      case StringStyle.Literal      => common.ScalarStyle.LITERAL
+      case StringStyle.Folded       => common.ScalarStyle.FOLDED
     }
   }
 
@@ -142,22 +141,6 @@ object Printer {
     case object Windows extends LineBreak
     case object Mac extends LineBreak
   }
-
-  sealed trait YamlVersion
-  object YamlVersion {
-    case object Yaml1_0 extends YamlVersion
-    case object Yaml1_1 extends YamlVersion
-    case object Auto extends YamlVersion
-  }
-
-  private def yamlTag(json: Json) = json.fold(
-    Tag.NULL,
-    _ => Tag.BOOL,
-    number => numberTag(number),
-    _ => Tag.STR,
-    _ => Tag.SEQ,
-    _ => Tag.MAP
-  )
 
   private def numberTag(number: JsonNumber): Tag =
     if (number.toString.contains(".")) Tag.FLOAT else Tag.INT

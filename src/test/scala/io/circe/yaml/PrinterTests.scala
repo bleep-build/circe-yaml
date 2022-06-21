@@ -1,7 +1,7 @@
 package io.circe.yaml
 
 import io.circe.Json
-import io.circe.yaml.Printer.{ FlowStyle, LineBreak, StringStyle, YamlVersion }
+import io.circe.yaml.Printer.{ FlowStyle, LineBreak, StringStyle }
 import org.scalatest.freespec.AnyFreeSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -116,18 +116,6 @@ class PrinterTests extends AnyFreeSpec with Matchers {
   "Root float without decimal part" in {
     val json = Json.fromDoubleOrNull(22.0)
     Printer.spaces2.pretty(json) shouldEqual "22.0\n"
-  }
-
-  "Version" in {
-    val json = Json.fromString("foo")
-    Printer.spaces2.copy(version = YamlVersion.Yaml1_1).pretty(json) shouldEqual
-      """%YAML 1.1
-        |--- foo
-        |""".stripMargin
-    Printer.spaces2.copy(version = YamlVersion.Yaml1_0).pretty(json) shouldEqual
-      """%YAML 1.0
-        |--- foo
-        |""".stripMargin
   }
 
   "Line break" - {

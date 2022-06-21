@@ -18,7 +18,7 @@ val Versions = new {
   val scalaCheck = "1.15.4"
   val scalaTest = "3.2.11"
   val scalaTestPlus = "3.2.11.0"
-  val snakeYaml = "1.28"
+  val snakeYaml = "2.3"
   val previousCirceYaml = "0.13.1"
 }
 
@@ -56,7 +56,7 @@ val root = project
     libraryDependencies ++= Seq(
       "io.circe" %% "circe-core" % Versions.circe,
       "io.circe" %% "circe-jawn" % Versions.circe % Test,
-      "org.yaml" % "snakeyaml" % Versions.snakeYaml,
+      "org.snakeyaml" % "snakeyaml-engine" % Versions.snakeYaml,
       "io.circe" %% "circe-testing" % Versions.circe % Test,
       "org.typelevel" %% "discipline-core" % Versions.discipline % Test,
       "org.scalacheck" %% "scalacheck" % Versions.scalaCheck % Test,

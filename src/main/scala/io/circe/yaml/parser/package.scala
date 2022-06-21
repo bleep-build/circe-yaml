@@ -3,12 +3,19 @@ package io.circe.yaml
 import cats.syntax.either._
 import io.circe._
 import java.io.{ Reader, StringReader }
-import org.yaml.snakeyaml.Yaml
-import org.yaml.snakeyaml.constructor.SafeConstructor
-import org.yaml.snakeyaml.nodes._
+import java.util.Optional
+import org.snakeyaml.engine.v2.composer.Composer
+import org.snakeyaml.engine.v2.constructor.StandardConstructor
+import org.snakeyaml.engine.v2.nodes._
+import org.snakeyaml.engine.v2.parser.ParserImpl
+import org.snakeyaml.engine.v2.scanner.StreamReader
 import scala.collection.JavaConverters._
 
 package object parser {
+
+  import org.snakeyaml.engine.v2.api.LoadSettings
+
+  val settings: LoadSettings = LoadSettings.builder.build
 
   /**
    * Parse YAML from the given [[Reader]], returning either [[ParsingFailure]] or [[Json]]
@@ -20,37 +27,51 @@ package object parser {
     json <- yamlToJson(parsed)
   } yield json
 
-  def parse(yaml: String): Either[ParsingFailure, Json] = parse(new StringReader(yaml))
+  def parse(yaml: String): Either[ParsingFailure, Json] =
+    parse(new StringReader(yaml))
 
   def parseDocuments(yaml: Reader): Stream[Either[ParsingFailure, Json]] = parseStream(yaml).map(yamlToJson)
   def parseDocuments(yaml: String): Stream[Either[ParsingFailure, Json]] = parseDocuments(new StringReader(yaml))
 
-  private[this] def parseSingle(reader: Reader) =
-    Either.catchNonFatal(new Yaml().compose(reader)).leftMap(err => ParsingFailure(err.getMessage, err))
+  private[this] def asScala[T](ot: Optional[T]): Option[T] =
+    if (ot.isPresent) Some(ot.get()) else None
+
+  private[this] def createComposer(reader: Reader) =
+    new Composer(settings, new ParserImpl(settings, new StreamReader(settings, reader)))
+
+  private[this] def parseSingle(reader: Reader): Either[ParsingFailure, Node] =
+    Either.catchNonFatal {
+      val composer = createComposer(reader)
+      asScala(composer.getSingleNode)
+    } match {
+      case Left(err)          => Left(ParsingFailure(err.getMessage, err))
+      case Right(None)        => Left(ParsingFailure("no document found", new RuntimeException("no document found")))
+      case Right(Some(value)) => Right(value)
+    }
 
   private[this] def parseStream(reader: Reader) =
-    new Yaml().composeAll(reader).asScala.toStream
+    createComposer(reader).asScala.toStream
 
   private[this] object CustomTag {
-    def unapply(tag: Tag): Option[String] = if (!tag.startsWith(Tag.PREFIX))
+    def unapply(tag: Tag): Option[String] = if (!tag.getValue.startsWith(Tag.PREFIX))
       Some(tag.getValue)
     else
       None
   }
 
-  private[this] class FlatteningConstructor extends SafeConstructor {
+  private[this] class FlatteningConstructor(settings: LoadSettings) extends StandardConstructor(settings) {
     def flatten(node: MappingNode): MappingNode = {
       flattenMapping(node)
       node
     }
 
     def construct(node: ScalarNode): Object =
-      getConstructor(node).construct(node)
+      super.construct(node)
   }
 
   private[this] def yamlToJson(node: Node): Either[ParsingFailure, Json] = {
     // Isn't thread-safe internally, may hence not be shared
-    val flattener: FlatteningConstructor = new FlatteningConstructor
+    val flattener: FlatteningConstructor = new FlatteningConstructor(settings)
 
     def convertScalarNode(node: ScalarNode) = Either
       .catchNonFatal(node.getTag match {
@@ -74,7 +95,7 @@ package object parser {
         case Tag.NULL => Json.Null
         case CustomTag(other) =>
           Json.fromJsonObject(JsonObject.singleton(other.stripPrefix("!"), Json.fromString(node.getValue)))
-        case other => Json.fromString(node.getValue)
+        case _ => Json.fromString(node.getValue)
       })
       .leftMap { err =>
         ParsingFailure(err.getMessage, err)
